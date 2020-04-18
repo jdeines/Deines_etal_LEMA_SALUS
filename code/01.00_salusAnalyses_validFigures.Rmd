@@ -1,0 +1,307 @@
+---
+title: "SALUS validation figures"
+author: "Jill Deines"
+date: "July 10, 2018"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    keep_md: true
+---
+
+Goal: Make Figures for validating SALUS output for chosen models
+
+* yield validation for 0018 model run 
+* Water use for BAU and LEMA
+* Corn yields for BAU and LEMA
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      fig.path='../figure/01.00_salusAnalyses_validFigures/',
+                      cache = FALSE)
+```
+
+**R Packages Needed**
+
+```{r packages, warning=FALSE, message=FALSE}
+library(tidyverse)
+library(lemon) # easy ggplot panel ticks
+library(here)
+
+# library(devtools)
+# install_github('jdeines/salustools')
+library(salustools) # for nqb theme
+
+sessionInfo()
+```
+
+
+*Directories*
+
+```{r directories}
+baseDir <- here::here()
+
+# nass yield summary
+nassDir <- paste0(baseDir, '/data/tabular/NASS')
+
+# salus output
+salusDir <- paste0(baseDir, '/data/SALUS_output')
+yieldValidModel <- '1_yieldCalibration_0018'
+BAUmodel <- '2_BAU_0054'
+LEMAmodel <- '3_LEMA_0086'
+
+# wimas well data
+wellDir <- paste0(baseDir, '/data/tabular/wellData')
+wellFileName<- 'WIMAS_1996-2016_SheridanNull9_convertedUnits.csv'
+```
+
+
+# SALUS yield valiadation
+Plot salus yield IQR against NASS, for rainfed and irrigation crops
+
+## load and process NASS
+
+```{r loadYieldDetailed}
+plotYear <- 2008
+
+# state of kansas
+nassState <- read_csv(paste0(nassDir,
+                    '/NASS_yields_STATE_KS_2006-2017_4crops_CLEANED.csv')) %>%
+  mutate(type = recode(type, "NON-IRRIGATED" = "Rainfed", 
+                             "IRRIGATED" = "Irrigated", 
+                             "ALL" = "Combined")) %>%
+  # drop unneeded "coombineds"
+  filter(!(type == "Combined" & crop %in% c('CORN'))) %>%
+  filter(year >= plotYear) %>%
+  dplyr::select(-c(yield_bu_acre, state_name)) %>%
+  rename(stateNassYields = yield_kg_ha)
+
+```
+
+## load SALUS runs
+load salus runs for chosen 0018, best yield fit with N off and water solid (75%, 25 mm)
+
+```{r salusAllYieldsJoin}
+# converter for salus output
+statusKey <- data.frame(type = c('Irrigated', 'Rainfed'),
+                        irrigated = c('Y','N'),
+                        stringsAsFactors = FALSE)
+
+cropKey <- data.frame(crop = c('CORN','SORGHUM','WHEAT','SOYBEANS','ALFALFA'),
+                      cropsalus = c('MZ','SG','WH','SB','AL'),
+                      stringsAsFactors = FALSE)
+
+# load yield tabular results
+yields <- read_csv(paste0(salusDir,'/',yieldValidModel,'/results/yields_statsAndTotals.csv')) %>%
+    rename(cropsalus = crop) %>%
+  left_join(cropKey, by = 'cropsalus') %>%
+  left_join(statusKey, by = 'irrigated') %>%
+  dplyr::select(c(year, crop, type, yield_Q1_kgha, yield_median_kgha, 
+                  yield_Q3_kgha))  %>%
+  filter(crop != 'ALFALFA') %>%
+  filter(year >= plotYear)
+
+# combine data
+yieldValid <- yields %>%
+  full_join(nassState, by = c('year','crop','type'))
+
+# assoicate nass state combined with salus rainfed
+yieldValidSimple <- yieldValid %>%
+  # assign 'combined' nass data to rainfed
+    mutate(type2 = recode(type, 'Combined' = 'Rainfed')) %>%
+  mutate(crop = recode(crop, 'CORN' = 'Corn', 'SORGHUM' = 'Sorghum',
+                       'SOYBEANS' = 'Soybeans','WHEAT' = 'Wheat'))
+
+# extract and smoosh back together
+nasser <- yieldValidSimple %>% 
+  select(c(year, crop, type2, stateNassYields)) %>%
+  filter(!is.na(stateNassYields))
+
+# assoicate nass state combined with salus rainfed
+yieldValidState <- yieldValidSimple %>%
+  select(c(year, crop, type2, yield_median_kgha)) %>%
+  filter(!is.na(yield_median_kgha)) %>%
+  left_join(nasser, by = c('year','crop','type2'))
+```
+
+## Plot!
+yield validation
+
+```{r yieldValidSimple_manuscript, dev=c('png'), fig.height = 3.5, fig.width =3.5, dpi=600}
+
+# plot it
+ggplot(yieldValidState,
+       aes(x=stateNassYields/1000, y = yield_median_kgha/1000, color=crop)) +
+      stat_smooth(method = 'lm', se=F, size=1, colour='cornflowerblue') +
+  geom_point(aes(shape = type2)) +
+  scale_shape_manual(values = c(16, 4)) +
+    geom_abline(slope = 1, intercept = 0, linetype='dashed') + 
+     coord_equal(xlim=c(0,15), ylim=c(0,15)) + 
+  scale_color_manual(values=c('goldenrod2','darkorange2','forestgreen','orange4'))+
+  ylab('SALUS Yields (t/ha)') + xlab('NASS State Yields (t/ha)') +
+   theme_bw() + theme(legend.position = c(.18,.69),
+                      legend.background = element_blank(),
+                     legend.title = element_blank(),
+                     legend.key = element_blank(),
+                    panel.grid = element_blank(),
+                     axis.text=element_text(size=10),
+                     legend.text=element_text(size=10),
+                     axis.title=element_text(size=11))
+
+
+simpleAgreement <- lm(yield_median_kgha~stateNassYields, data=yieldValidState)
+summary(simpleAgreement)
+```
+
+## Quantify SALUS and NASS yield agreement
+
+```{r yieldNums}
+precDiffs <- yieldValid %>%
+  select(-c(yield_Q1_kgha,yield_Q3_kgha)) %>%
+  # calculate percent difference
+  mutate(percDiff = ((yield_median_kgha - stateNassYields) / stateNassYields)*100) %>%
+  arrange(crop,type,year)
+
+precDiffs %>%
+  filter(type == 'Irrigated') %>%
+  group_by(crop) %>%
+  summarize(maxDisagree = max(abs(percDiff), na.rm=T))
+```
+
+
+# Water validation figure
+
+## load and format data
+
+### WIMAS well data
+
+```{r loadWimas}
+# load wimas data for sheridan 6
+wimas <- read_csv(paste0(wellDir, '/', wellFileName)) %>%
+  filter(masterid == 'sheridan')  
+
+# count wells in study area duing study period
+wimas %>% 
+  filter(year > 2005 & year < 2018) %>%
+  filter(!is.na(volume_m3)) %>%
+  group_by(PDIV_ID) %>%
+  slice(1) %>%
+  nrow()
+
+# get annual volume totals and format to join with SALUS
+wimasAnnual <- wimas %>%
+  group_by(year) %>%
+  summarise(wimasVolume_m3 = sum(volume_m3, na.rm=TRUE),
+            wimasArea_m2 = sum(area_m2, na.rm=TRUE),
+            wimasDepth_mm = mean(depth_m * 1000, na.rm=TRUE)) %>%
+  mutate(wimasArea_ha = wimasArea_m2 * 1e-4,
+         wimasVolume_km3 = wimasVolume_m3 * 1e-9,
+         datasource = 'WIMAS') %>%
+  dplyr::select(c(year, wimasVolume_km3))
+```
+
+### SALUS water results
+load and combine with WIMAS
+
+```{r loadSALUS}
+bau <- read_csv(paste0(salusDir,'/', BAUmodel, '/results/WaterVars_meansTotals.csv')) %>%
+  mutate(runID = '0054')
+lema <- read_csv(paste0(salusDir,'/', LEMAmodel, '/results/WaterVars_meansTotals.csv')) %>%
+  mutate(runID = '0086')
+
+water <- bau %>%
+  bind_rows(lema) %>%
+  mutate(datasource = 'salus') %>%
+  filter(variable == 'irrigation') %>%
+  mutate(salusVolume_km3 = totalVolume_m3 * 1e-9) %>%
+  select(c(runID, year, salusVolume_km3))
+
+master <- water %>%
+  left_join(wimasAnnual, by = c('year'))
+
+# assume a 90% efficiency -------------------------------
+master$salusVol_90adj <- master$salusVolume_km3 / 0.9
+
+plotYear <- 2008
+summary <- master %>%
+  filter(year >= plotYear & runID %in% c('0054','0086')) %>%
+  mutate(runID = recode(runID, '0086' = 'LEMA', '0054' = 'BAU'))
+```
+
+
+
+## Plot Pumping: WIMAS and Runs
+
+```{r waterValidComparison, fig.width = 6.5, fig.height = 2.8, dev = c('png')}
+
+# water: remove LEMA scenario pre-lema data
+waterplot <- summary %>%
+  filter(!(runID == 'LEMA' & year < 2013)) 
+
+# convert km3 to million m3 with 1e3
+ggplot(waterplot,
+       aes(x=year, y = salusVol_90adj*1e3, color = runID, group = runID)) +
+  geom_line(lwd=1.1) + 
+  # add wimas
+  geom_line(data = waterplot, 
+      aes(x=year, y = wimasVolume_km3*1e3), color = 'blue', linetype='dashed') +
+  geom_vline(xintercept = 2012.5, color = 'gray50', linetype = 'longdash') +
+  scale_x_continuous(breaks = c(2008,2010,2012,2014,2016)) +
+   scale_color_manual(values=rev(c("#35978f", "#bf812d"))) +
+  ylab(expression(paste('Pumping Volume (million ',m^3,')',sep=''))) +
+  xlab('') +
+  theme_bw() + theme(legend.position = c(.2,.2), 
+                     legend.title = element_blank(),
+                    panel.grid = element_blank(),
+                     axis.text=element_text(size=10),
+                     legend.text=element_text(size=10),
+                     axis.title=element_text(size=11))
+```
+
+## Estimated water savings
+How much less pumping occurred in the BAU model vs the LEMA model?
+
+### aggregate 5 year total
+
+```{r modeledWaterSavings}
+waterplot %>%
+  filter(year >= 2013)
+
+diffInTotalWater <- waterplot %>%
+  filter(year >= 2013) %>%
+  group_by(runID) %>%
+  summarize(totalWaterSALUS = sum(salusVol_90adj))
+diffInTotalWater
+
+# magnitude change
+diffInTotalWater[diffInTotalWater$runID == 'BAU',2] - 
+  diffInTotalWater[diffInTotalWater$runID == 'LEMA',2]
+
+# percent change
+(1-(diffInTotalWater[diffInTotalWater$runID == 'LEMA',2]/diffInTotalWater[diffInTotalWater$runID == 'BAU',2])) * 100
+
+```
+
+### mean annual
+
+```{r meanAnnualReductions}
+# mean annual lema pumpnig
+diffInTotalWater[diffInTotalWater$runID == 'LEMA',2] / 5
+
+# mean annual BAU pumpnig
+diffInTotalWater[diffInTotalWater$runID == 'BAU',2] / 5
+
+# percent change
+(1-((diffInTotalWater[diffInTotalWater$runID == 'LEMA',2] /5)/
+      (diffInTotalWater[diffInTotalWater$runID == 'BAU',2]/5))) * 100
+
+# absolute reduction annualized?
+(diffInTotalWater[diffInTotalWater$runID == 'BAU',2] / 5 ) - (
+diffInTotalWater[diffInTotalWater$runID == 'LEMA',2] / 5)
+```
+
+
+
+
+
+
