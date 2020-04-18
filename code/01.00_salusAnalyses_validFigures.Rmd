@@ -13,7 +13,6 @@ Goal: Make Figures for validating SALUS output for chosen models
 
 * yield validation for 0018 model run 
 * Water use for BAU and LEMA
-* Corn yields for BAU and LEMA
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE,

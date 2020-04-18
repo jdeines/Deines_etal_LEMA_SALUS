@@ -1,0 +1,116 @@
+---
+title: "SALUS: yield penalty"
+author: "Jill Deines"
+date: "July 10, 2018"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    keep_md: true
+---
+
+Goal: Analyze yield differences between scenarios + make figure
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      fig.path='../figure/03.00_salusAnalyses_yieldDifferences/',
+                      cache = FALSE)
+```
+
+**R Packages Needed**
+
+```{r packages, warning=FALSE, message=FALSE}
+library(tidyverse)
+library(here)
+library(lemon)
+
+sessionInfo()
+```
+
+
+*Directories*
+
+```{r directories}
+baseDir <- here::here()
+
+# salus output ------------------
+salusDir <- paste0(baseDir, '/data/SALUS_output')
+BAUmodel <- '2_BAU_0054'
+LEMAmodel <- '3_LEMA_0086'
+```
+
+# Yield Differences
+
+## load
+
+```{r loadYields}
+cropKey <- data.frame(cropFull = c('CORN','SORGHUM','WHEAT','SOYBEANS','ALFALFA'),
+                      crop = c('MZ','SG','WH','SB','AL'),
+                      stringsAsFactors = FALSE)
+
+
+bau <- read_csv(paste0(salusDir,'/', BAUmodel, '/results/yields_statsAndTotals.csv')) %>%
+  mutate(runID = '0054')
+lema <- read_csv(paste0(salusDir,'/', LEMAmodel, '/results/yields_statsAndTotals.csv')) %>%
+  mutate(runID = '0086')
+
+yield0 <- bau %>%
+  bind_rows(lema) %>%
+  filter(irrigated == 'Y') %>%
+  mutate(datasource = 'salus') %>%
+  left_join(cropKey, by = 'crop') %>%
+    mutate(runID = recode(runID, '0086' = 'LEMA', '0054' = 'BAU')) %>%
+  dplyr::select(c(year, cropFull, yield_median_kgha, runID)) %>%
+  tidyr::spread(., key = cropFull, value = yield_median_kgha)
+```
+
+
+## Plot Run Yield Diffs: yield penalty
+Plot for LEMA periods only
+
+```{r yieldPenalty, fig.width = 6.5, fig.height = 4, dpi=300, dev = c('png')}
+# format for crop specific yield differences
+yieldDiffs <- yield0 %>% 
+  filter(year>=2013) %>%
+  dplyr::select(c(year, runID, CORN, SORGHUM, SOYBEANS, WHEAT)) %>%
+  tidyr::gather(., key = crop, value = median_yield_kgha, CORN:WHEAT)
+
+
+ggplot(yieldDiffs,
+       aes(year, median_yield_kgha, color = runID, group = runID)) +
+  geom_line(lwd=1.08) +
+  # add dashed line for wheat
+  geom_line(data = yieldDiffs %>% filter(crop == 'WHEAT' & runID == 'BAU'), 
+            linetype = 'dashed', lwd = 1.08) +
+  facet_rep_wrap(~crop, scales = 'free_y', repeat.tick.labels = 'y') +
+  ylab('Yield (kg/ha)') + xlab('') +
+ # scale_x_continuous(breaks = c(2008,2010,2012,2014,2016)) +
+  scale_color_manual(values=rev(c("#35978f", "#bf812d"))) +
+  theme_bw() + theme(legend.position = c(.1,.88), 
+                     legend.title = element_blank(),
+                    panel.grid = element_blank(),
+                     axis.text=element_text(size=10),
+                     legend.text=element_text(size=10),
+                     axis.title=element_text(size=11))
+```
+
+## Quantitative breakdown
+Get the difference between each year for each crop
+
+```{r yieldDiff}
+
+yieldDiffNums <- yieldDiffs %>%
+  # calculate absolute and percetn diff by crop
+  tidyr::spread(., key = runID, value = median_yield_kgha) %>%
+  group_by(crop, year) %>%
+  summarize(absDiff_kgha = BAU-LEMA,
+            percDecrease = (1-(LEMA/BAU))*100)
+yieldDiffNums
+
+# get mean percent decrease by crop
+yieldDiffNums %>%
+  ungroup() %>%
+  group_by(crop) %>%
+  summarize(meanPercentDecrease = mean(percDecrease))
+```
+
