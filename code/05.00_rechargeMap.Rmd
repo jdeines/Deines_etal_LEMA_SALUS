@@ -1,0 +1,75 @@
+---
+title: "Recharge Maps"
+author: "Jill Deines"
+date: "July 16, 2018"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    keep_md: true
+---
+
+Goal: Make a map of change in recharge between 5 year periods
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      fig.path='../figure/05.00_rechargeMap/',
+                      cache = FALSE)
+```
+
+**R Packages Needed**
+
+```{r packages, warning=FALSE, message=FALSE}
+library(tidyverse)
+library(raster)
+library(rgdal)
+
+library(here)
+
+sessionInfo()
+```
+
+# recharge 
+
+```{r rechargeload}
+# load recharge
+salusDir <- paste0(here::here(), '/data/SALUS_output')
+BAUmodel <- '2_BAU_0054'
+LEMAmodel <- '3_LEMA_0086'
+
+
+r0054 <- readRDS(paste0(salusDir, '/', BAUmodel,'/results/Rch_stack.rds'))
+r0086 <- readRDS(paste0(salusDir, '/', LEMAmodel,'/results/Rch_stack.rds'))
+
+# keep just 2013-2017 ------------------
+
+#year names to keep
+years <- paste0('X', 2013:2017)
+
+# subset
+bau <- r0054[[years]]
+lema <- r0086[[years]]
+
+# get total recharge
+bau5 <- sum(bau)
+lema5 <- sum(lema)
+
+rechargeReduction <- lema5 - bau5
+```
+
+# nice figure
+
+```{r deltaRecharge_0086, fig.width = 6, fig.height = 4,  dpi=600}
+# reproject
+classProj <- '+proj=aea +lat_1=20 +lat_2=60 +lat_0=40 +lon_0=-101 +x_0=0 +y_0=0 +datum=NAD83 +units=m +no_defs +ellps=GRS80 +towgs84=0,0,0'
+deltaR <- projectRaster(rechargeReduction, crs=classProj, res=30, method='ngb')
+
+# plot
+spplot(deltaR, col.regions = rev(bpy.colors(16)),
+       maxpixels = 800000)
+```
+
+
+
+
+
