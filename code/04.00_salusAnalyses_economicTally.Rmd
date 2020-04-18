@@ -1,0 +1,302 @@
+---
+title: 'Salus Analyses: Economics'
+author: "Jill Deines"
+date: "July 11, 2018"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    keep_md: true
+---
+
+Goal: Calculate monetary differences between pre-lema irrigation behavior model and LEMA irrigation behavior model
+
+* income: crop yield * commodity prices
+* energy savings and cost
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      fig.path='../figure/04.00_salusAnalyses_money/',
+                      cache = FALSE)
+```
+
+**R Packages Needed**
+
+```{r packages, warning=FALSE, message=FALSE}
+library(tidyverse)
+library(here)
+
+sessionInfo()
+```
+
+*Directories*
+
+```{r directories}
+baseDir <- here::here()
+
+# price data ------------
+priceDir <- paste0(baseDir,'/data/tabular/pricing/commodityPrices')
+# filename for inflation adjustment table (made in inflationTable chunk)
+cpiFile <- 'cpi_priceAdjustments.csv'
+# prices downloaded from NASS
+nassRawFile <- 'NASS_price_commodity5_2000-2017.csv'
+
+
+# salus output ------------------
+salusDir <- paste0(baseDir, '/data/SALUS_output')
+BAUmodel <- '2_BAU_0054'
+LEMAmodel <- '3_LEMA_0086'
+
+# wimas well data
+wellDir <- paste0(baseDir, '/data/tabular/wellData')
+wellFileName<- 'WIMAS_1996-2016_SheridanNull9_convertedUnits.csv'
+```
+
+# Load stuff
+
+## price data
+Price data was downloaded manually from the NASS quickstats tool (https://quickstats.nass.usda.gov/) for the following query: SURVEY - CROPS - FIELD CROPS - CORN/SOYBEANS/WHEAT/HAY/SORGHUM - PRICE RECEIVED - 
+
+* CORN, GRAIN - PRICE RECEIVED, MEASURED IN $ / BU
+* HAY, PRICE RECEIVED, MEASURED IN $ / TON (short ton)
+* SORGHUM, GRAIN - PRICE RECEIVED, MEASURED IN $ / CWT (hundredweight, == 100 lbs)
+* SOYBEANS - PRICE RECEIVED, MEASURED IN $ / BU
+* WHEAT - PRICE RECEIVED, MEASUTED IN $ / BU
+
+- TOTAL - NATIONAL - US TOTAL - 2000:2017 - ANNUAL - YEAR
+
+
+Here, I load the data and clean it to have consistent pricing across crops and years
+
+Weights of crops per bushel:
+
+UNC site says 
+
+* corn, shelled: 56 lbs per bushel  
+* corn, ear: 70
+* corn (in ear):35
+
+crop | pounds/bushel | 1 bu/acre = 
+--------------- | ------ | --------
+corn/sorghum | 56 | 62.89 kg/ha
+soy/wheat | 60 | 67.11 kg/ha
+
+* https://www.extension.iastate.edu/agdm/wholefarm/html/c6-80.html
+* http://www.unc.edu/~rowlett/units/scales/bushels.html
+
+sorghum: CWT = 100 lbs
+
+1 lb = 0.4536 kg
+1 kg = 2.2 lbs
+
+```{r nassPrice_marketingYearPeriod}
+
+# make a units columns 
+unitkey <- data.frame(Commodity = c('CORN','HAY','SORGHUM','SOYBEANS','WHEAT'),
+                      unit = c('BU','TON','CWT','BU','BU'),
+                      stringsAsFactors = FALSE)
+
+# load consumer price index adjustments
+cpi <- read_csv(paste0(priceDir, '/',cpiFile))
+
+# load nass
+price0 <- read_csv(paste0(priceDir, '/', nassRawFile)) %>%
+  left_join(unitkey, by = c('Commodity')) %>%
+  dplyr::select(c(Commodity, Year, Value, unit))
+
+# add the adjustment factor
+price <- merge(price0, cpi[,c('cpi_year','adj_factor_2017')], 
+               by.x = 'Year', by.y = 'cpi_year')
+
+# adjust prices (note: matched trials at https://data.bls.gov/cgi-bin/cpicalc.pl)
+price$price_2017 <- price$Value / price$adj_factor_2017
+
+# adjust to price per kg
+kgConverter <- data.frame(Commodity = c('CORN','WHEAT','SOYBEANS','SORGHUM'),
+                 nassToKgConversion = c(0.039,  0.0367, 0.0367, 0.0045),
+                 stringsAsFactors = F)
+priceKg <- price %>%
+  left_join(kgConverter, by = c('Commodity')) %>%
+  mutate(price_2017_kg = price_2017 * nassToKgConversion) %>%
+  filter(Commodity != 'HAY')
+
+# plot it
+ggplot(data = priceKg, 
+       aes(x=Year, y = price_2017, color = Commodity, group = Commodity)) +
+  ylab('2017 US Dollars per Unit') +
+  geom_line() +
+  theme_bw() +
+  ggtitle('Inflation-adjusted Prices')
+
+ggplot(data = priceKg, 
+       aes(x=Year, y = price_2017_kg, color = Commodity, group = Commodity)) +
+  ylab('2017 US Dollars per Kg') +
+  geom_line() +
+  theme_bw() +
+  ggtitle('Inflation-adjusted Prices, $ / kg')
+```
+
+## Energy Prices
+https://www.npr.org/sections/money/2011/10/27/141766341/the-price-of-electricity-in-your-state - KS wide = 10.5 cents per kWh
+https://www.electricitylocal.com/states/kansas/
+
+* commericial: 9.24
+* industrial: 7.09
+* residential: 11.24
+
+## SALUS data
+
+### total region yields
+
+```{r salusYields}
+cropKey <- data.frame(cropFull = c('CORN','SORGHUM','WHEAT','SOYBEANS','ALFALFA'),
+                      crop = c('MZ','SG','WH','SB','AL'),
+                      stringsAsFactors = FALSE)
+
+
+bau <- read_csv(paste0(salusDir,'/', BAUmodel, '/results/yields_statsAndTotals.csv')) %>%
+  mutate(runID = '0054')
+lema <- read_csv(paste0(salusDir,'/', LEMAmodel, '/results/yields_statsAndTotals.csv')) %>%
+  mutate(runID = '0086')
+
+yield0 <- bau %>%
+  bind_rows(lema) %>%
+  left_join(cropKey, by = 'crop') %>%
+  filter(cropFull != 'ALFALFA') %>%
+  filter(irrigated == 'Y') %>%
+  mutate(runID = recode(runID, '0086' = 'LEMA', '0054' = 'BAU')) %>%
+  dplyr::select(c(runID, year, cropFull, yield_total_kg)) %>%
+  rename(totalYield_kg =  yield_total_kg)
+```
+
+### total water use
+based on summary output from 04.10_salusAnalyses_waterSA.Rmd
+
+```{r salusWater}
+# load combined wimas/salus water data, median salus yields, nass yields
+# load wimas data for sheridan 6
+wimasAnnual <- read_csv(paste0(wellDir, '/', wellFileName)) %>%
+  filter(masterid == 'sheridan') %>%
+  group_by(year) %>%
+  summarise(wimasVolume_m3 = sum(volume_m3, na.rm=TRUE),
+            wimasArea_m2 = sum(area_m2, na.rm=TRUE),
+            wimasDepth_mm = mean(depth_m * 1000, na.rm=TRUE)) %>%
+  mutate(wimasArea_ha = wimasArea_m2 * 1e-4,
+         wimasVolume_km3 = wimasVolume_m3 * 1e-9,
+         datasource = 'WIMAS') %>%
+  dplyr::select(c(year, wimasVolume_km3))
+
+
+# salus
+bau2 <- read_csv(paste0(salusDir,'/', BAUmodel, '/results/WaterVars_meansTotals.csv')) %>%
+  mutate(runID = '0054')
+lema2 <- read_csv(paste0(salusDir,'/', LEMAmodel, '/results/WaterVars_meansTotals.csv')) %>%
+  mutate(runID = '0086')
+
+water <- bau2 %>%
+  bind_rows(lema2) %>%
+  filter(year >= 2013) %>%
+  mutate(datasource = 'salus') %>%
+  filter(variable == 'irrigation') %>%
+  mutate(runID = recode(runID, '0086' = 'LEMA', '0054' = 'BAU'),
+         salusVolume_km3 = totalVolume_m3 * 1e-9,
+         salusVol_90adj =  salusVolume_km3 / 0.9) %>%
+  select(c(runID, year, salusVolume_km3, salusVol_90adj)) %>%
+  left_join(wimasAnnual, by = c('year'))
+
+```
+
+# Calculate income loss and savings
+
+```{r yieldprofit}
+# crop profit
+priceSlim <- priceKg %>%
+  rename(crop = Commodity,
+         year = Year) %>%
+  dplyr::select(c(year, crop, price_2017_kg))
+
+yieldPrices <- yield0 %>% 
+  rename(crop = cropFull) %>%
+  left_join(priceSlim, by = c('year','crop')) %>%
+  mutate(cropProfit = totalYield_kg * price_2017_kg) %>%
+  filter(year >= 2013)
+
+ggplot(yieldPrices,
+       aes(year, cropProfit, color = runID, group = runID)) +
+  geom_line() +
+  facet_wrap(~crop)+
+  theme_bw()
+yieldPrices
+
+# total diff
+cropProfit <- yieldPrices %>% 
+  group_by(runID, year) %>%
+  summarise(cropIncome = sum(cropProfit)) %>%
+  tidyr::spread(., runID, cropIncome) 
+cropProfit
+
+# difference
+cropLossByYear <- cropProfit %>% 
+  mutate(cropIncomeLoss = LEMA - BAU)
+cropLossByYear
+
+# money lost, 2013-2017 period
+totalMoneyLostCrop <- sum(cropLossByYear$cropIncomeLoss)
+totalMoneyLostCrop
+
+# total percent decline in income
+cropLossByYear %>%
+  summarize(BAU_totalincome = sum(BAU),
+            LEMA_totalincome = sum(LEMA))
+(1-(80491071/81095452)) * 100
+```
+
+### crop water use
+* 1 kwh = 3.6 MJ
+
+* commericial: 9.24
+* industrial: 7.09
+* residential: 11.24
+
+```{r watercosts}
+
+# water costs -----------------------------
+energyDollarsPerkWh <- 7.09 * 1e-2
+energyDollarsPerMJ <- energyDollarsPerkWh / 3.6
+
+waterCosts <- water %>%
+  mutate(volume_m3 = salusVol_90adj * 1e9,
+         MJ = volume_m3 * 3.1) %>%
+  mutate(waterCosts = MJ * energyDollarsPerMJ)
+waterCosts
+
+ggplot(waterCosts, 
+       aes(year, waterCosts, color = runID, group = runID)) +
+  geom_line() +
+  theme_bw()
+
+# total change in water costs
+yearlySavings <- waterCosts %>%
+  dplyr::select(c(runID, year, waterCosts)) %>%
+  tidyr::spread(., key = runID, value = waterCosts) %>%
+  mutate(savings = BAU - LEMA)
+yearlySavings
+
+# total savings
+totalWaterSaved <- sum(yearlySavings$savings)
+totalWaterSaved
+
+# percent savings
+yearlySavings %>%
+  summarize(BAU_totalWaterCosts = sum(BAU),
+            LEMA_totalWaterCosts = sum(LEMA))
+(1-(7272005/9691516)) * 100
+```
+
+Net savings
+
+```{r netSavings}
+totalWaterSaved + totalMoneyLostCrop
+```
+
