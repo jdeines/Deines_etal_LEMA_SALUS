@@ -1,0 +1,171 @@
+---
+title: 'Study Area: Crop Types'
+author: "Jill Deines"
+date: "June 6, 2018"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    keep_md: true
+---
+
+Goal: Summarize dominant crops in the LEMA project study area 
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, fig.path='../figure/00.70_CDL_summary/',
+                      cache = FALSE)
+```
+
+**R Packages Needed**
+
+```{r packages, warning=FALSE, message=FALSE}
+library(tidyverse)
+library(stringr)
+library(here)
+
+sessionInfo()
+```
+
+### user variables and directories
+
+```{r uservars}
+baseDir <- here::here()
+nassDir <- paste0(baseDir, '/data/tabular/NASS')
+cdlName <- 'CDL_Sheridan_2006-2017_cleaned.csv'
+
+sheridan <- read_csv(paste0(nassDir,'/',cdlName))
+```
+
+
+# Sheridan Stats
+What are the CDL classes that cover 95% of the area? Or most of the area for 2008+
+
+
+```{r sheridan2008, fig.width = 5, fig.height = 3.5}
+# crops ever planted
+unique(sheridan$cdlClassName)
+
+# mean acres by crop
+cropMeans8 <- sheridan %>%
+  filter(Year > 2008) %>%
+  group_by(cdlClassName) %>%
+  # get mean crop type area over study period
+  summarise(meanArea_km2 = mean(area_km2)) %>%
+  arrange(-meanArea_km2) %>%
+  # tally how much of the study area are covered by the ordered crops
+  mutate(totalArea = sum(meanArea_km2),
+         proportion = meanArea_km2/totalArea,
+         cumArea = cumsum(meanArea_km2),
+         cumproportion = cumArea/totalArea)
+
+# check it
+cropMeans8
+
+# keep top classes only
+
+classes <- c('Corn','Grass/Pasture','Winter Wheat','Fallow/Idle Cropland',
+             'Sorghum','Soybeans','Developed/Open Space','Alfalfa')
+majorCrops8 <- cropMeans8 %>%
+  filter(cdlClassName %in% classes)
+
+shortnames <- data.frame(cdlClassName = classes,
+                         Commodity = c('Corn','Grass','Wheat','Fallow',
+                                       'Sorghum','Soy', 'Dev.','Alfalfa'))
+majorCrops8 <- majorCrops8 %>% 
+  left_join(shortnames)
+
+# plot
+position <- majorCrops8$Commodity
+ggplot(majorCrops8, 
+       aes(x=Commodity, y=meanArea_km2)) +
+  geom_bar(stat='identity') + 
+  ylab(expression(paste('Area (',km^2,')',sep=''))) + 
+  scale_x_discrete(limits = position) +
+  ggtitle('Sheridan 6, 2008-2017 mean') + 
+  theme_bw() + theme(legend.title=element_blank(),
+                     axis.text=element_text(size=10),
+                     legend.text=element_text(size=10),
+                     axis.title=element_text(size=11),
+                     panel.grid.major = element_blank(),
+                     panel.grid.minor = element_blank())
+
+majorCrops8
+```
+
+## CDL by LEMA status
+compare coverage dominance before/after LEMA: 5 year means
+
+```{r sheridan_cdl_byLEMA_paired, dev = c('png'), dpi = 300, fig.width = 4.5, fig.height = 3.5}
+# assign lema status
+sheridan$isLema <- NA
+sheridan[sheridan$Year < 2013,'isLema'] <- 0
+sheridan[sheridan$Year >= 2013,'isLema'] <- 1
+
+# mean acres by crop
+cropMeansByLema <- sheridan %>%
+  filter(Year >= 2008) %>%
+  group_by(isLema, cdlClassName) %>%
+  # get mean crop type area over study period
+  summarise(meanArea_km2 = mean(area_km2)) %>%
+  arrange(-meanArea_km2) %>%
+  # tally how much of the study area are covered by the ordered crops
+  mutate(totalArea = sum(meanArea_km2),
+         proportion = meanArea_km2/totalArea,
+         cumArea = cumsum(meanArea_km2),
+         cumproportion = cumArea/totalArea)
+
+# check it
+cropMeansByLema %>% filter(isLema == 0)
+cropMeansByLema %>% filter(isLema == 1)
+
+# keep top classes only
+
+classes <- c('Corn','Grass/Pasture','Winter Wheat','Fallow/Idle Cropland',
+             'Sorghum','Soybeans','Developed/Open Space','Alfalfa')
+
+majorCropsLema <- cropMeansByLema %>%
+  filter(cdlClassName %in% classes)
+
+shortnames <- data.frame(cdlClassName = classes,
+                         Commodity = c('Corn','Grass','Wheat','Fallow',
+                                       'Sorghum','Soy', 'Developed','Alfalfa'))
+
+# facet name key
+facetNames <- data.frame(isLema = c(0,1),
+                         facetName = factor(c('Pre-LEMA (2008-2012)','LEMA (2013-2017)'),
+                                            levels = c('Pre-LEMA (2008-2012)','LEMA (2013-2017)')),
+                         stringsAsFactors = F)
+
+
+
+majorCropsLema <- majorCropsLema %>% 
+  left_join(shortnames) %>%
+  left_join(facetNames)
+majorCropsLema
+
+# plot
+
+position <- unique(majorCropsLema$Commodity)
+ggplot(majorCropsLema, 
+       aes(x=Commodity, y=meanArea_km2, fill = facetName)) +
+  geom_bar(stat='identity', position = position_dodge()) + 
+  ylab(expression(paste('Area (',km^2,')',sep=''))) + 
+  xlab('Land Use Classes') +
+    scale_fill_manual(values=rev(c("#35978f", "#bf812d"))) +
+  scale_x_discrete(limits = position) +
+  #ggtitle('Sheridan Mean CDL, 5 yr pre/post LEMA') + 
+  theme_bw() + theme(legend.title=element_blank(),
+                     legend.position = c(.65,.8),
+                    # axis.title.x = element_blank(),
+                     axis.text=element_text(size=10),
+                     legend.text=element_text(size=10),
+                     axis.title=element_text(size=11),
+                     axis.text.x=element_text(angle = 45, hjust=1),
+                     strip.text.x = element_text(size = 11),
+                     panel.grid.major = element_blank(),
+                     panel.grid.minor = element_blank())
+
+```
+
+
+
