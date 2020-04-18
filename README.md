@@ -1,7 +1,8 @@
-# Deines, Kendall, Butler, Basson, & Hyndman 2019: Model files, derived data, and analysis code
+# Deines, Kendall, Butler, Basson, & Hyndman 2019
+## Model files, derived data, and analysis code
 
 18 April 2020  
-Code by: Jillian Deines
+Code by: Jillian Deines  
 Contact: jillian.deines@gmail.com  
 
 ## Contents
