@@ -59,7 +59,7 @@ water <- bau %>%
   # recalc totalVolume_km3 from m3
   dplyr::select(-c(totalVolume_km3)) %>%
   mutate(totalVolume_km3 = totalVolume_m3 * 1e-9) %>%
-  dplyr::select(c(runID, year, variable, totalVolume_km3)) %>%
+  dplyr::select(c(runID, year, variable, totalVolume_km3, depth_mean_mm)) %>%
   mutate(runID = recode(runID, '0086' = 'LEMA', '0054' = 'BAU')) %>%
   filter(year >=2013) 
 
@@ -99,7 +99,7 @@ esac = soil transpiration
 recharge = deep percolation
 rofc = runoff
 
-```{r waterBudget_byYear, fig.width = 5, dev = c('pdf','png')}
+```{r waterBudget_byYear, fig.width = 5, dev = c('png')}
 unique(waterIrrAdj$variable)
 
 # muliply km3 by 1e3 for legibility (million m3)
@@ -154,7 +154,7 @@ irrigation is the total water extracted (salus estimates adjusted by 90% efficie
 
 deep percolation is called "recharge" in salus outputs
 
-```{r inOut_byRegion, fig.width = 5, fig.height=2.75, dev = c('pdf','png')}
+```{r inOut_byRegion, fig.width = 5, fig.height=2.75, dev = c('png')}
 # keep only irrigation and recharge, and make irrigation negative
 inOutData <- waterIrrAdj %>%
   filter(variable %in% c('irrigation','recharge'))
@@ -175,8 +175,8 @@ ggplot(inOutData,
 
 plot difference - by year
 
-```{r netChange_byYear, fig.width = 4, fig.height = 2.25, dev = c('pdf','png')}
-netDiff <- inOutData %>%
+```{r netChange_byYear, fig.width = 4, fig.height = 2.25}
+netDiff <- inOutData %>% dplyr::select(-c(depth_mean_mm)) %>%
   tidyr::spread(., key = variable, value = totalVolume_km3) %>%
   mutate(netChange = recharge - irrigation)
 
@@ -207,7 +207,7 @@ p1
 
 plot difference - over all
 
-```{r netChange_overall, fig.height = 3.5, fig.width = 2, dev=c('pdf','png')}
+```{r netChange_overall, fig.height = 3.5, fig.width = 2, dev=c('png')}
 totalNet <- netDiff %>%
   group_by(runID) %>%
   summarize(totalNet = sum(netChange))
@@ -224,7 +224,6 @@ p2 <- ggplot(totalNet,
                       axis.text=element_text(size=10),
                      legend.text=element_text(size=10),
                      axis.title=element_text(size=11))
-p2 
 p2 
 
 # increase in aquifer recharge:
@@ -243,7 +242,7 @@ totalDepthChange # m
 
 Line plot of diference over time
 
-```{r netChangeLine, fig.width = 4, fig.height = 1.25, dev=c('pdf','png')}
+```{r netChangeLine, fig.width = 4, fig.height = 1.25, dev=c('png')}
 # calculate bau vs lema net over time
 netDiffRegions <- netDiff %>%
   dplyr::select(-c(irrigation, recharge)) %>%
@@ -273,12 +272,40 @@ p3
 
 stack line and bar
 
-```{r netChangeCombine, fig.width = 4, fig.height = 3.5, dev=c('png','pdf')}
+```{r netChangeCombine, fig.width = 4, fig.height = 3.5, dev=c('png')}
 
 plot_grid(p1,p3, align='v', nrow=2, rel_heights=c(.6,.4))
 
 ```
 
 
+# Plot Water Budget Components
+for supplement
 
+## annual water budgets
+for whole region (including rainfed)
+
+```{r waterBudget_byYear_all_supplement, fig.width = 6.5, dev = c('png')}
+unique(water$variable)
+
+# better names
+waterKey <- data.frame(variable = c('epac','esac','irrigation','recharge','rofc','etac','precip'),
+                       variableNames = c('a) Plant Transpiration', 'b) Soil Evaporation','d) Irrigation','e) Recharge','c) Runoff','ET','f) Annual Precip'))
+
+waterIrrAdj2 <- waterIrrAdj %>%
+  left_join(waterKey)
+
+ggplot(waterIrrAdj2 %>% filter(!variable %in% c('etac')),
+       aes(x = year, y =depth_mean_mm, fill = runID)) +
+  geom_bar(stat='identity', position = position_dodge()) +
+  scale_fill_manual(values=rev(c("#35978f", "#bf812d"))) +
+  facet_rep_wrap(~variableNames) +
+  ylab(expression(paste('Regional Mean (mm)',sep=''))) +
+  theme_bw() + theme(panel.grid = element_blank(),
+                     legend.title = element_blank(),
+                     legend.position = c(.1,.3),
+                      axis.text=element_text(size=10),
+                     legend.text=element_text(size=10),
+                     axis.title=element_text(size=11))
+```
 

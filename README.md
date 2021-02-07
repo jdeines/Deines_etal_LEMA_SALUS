@@ -1,25 +1,34 @@
-# Deines, Kendall, Butler, Basson, & Hyndman 2019
+# Deines, Kendall, Butler, Basso, & Hyndman 2021, WRR
 ## Model files, derived data, and analysis code
 
-18 April 2020  
+6 February 2021  
 Code by: Jillian Deines  
 Contact: jillian.deines@gmail.com  
 
+This codebase accompanies the paper:
+
+Deines, JM, AD Kendall, JJ Butler Jr., B Basso, & DW Hyndman. 2021. Combining remote sensing and crop models to assess the sustainability of stakeholder-driven groundwater management in the US High Plains Aquifer. Water Resources Research, https://doi.org/10.1029/2020WR027756.
+
 ## Contents
 
+### Manuscript
+The preprint version of the manuscript (post-revisions, pre-formatting) and supplement 
+
 ### Data
-All data needed to reproduce the figures and results presented in the manuscript can be found in the `data` folder.
+All data needed to reproduce the figures and results presented in the manuscript can be found in the `data` folder. Other input data are available at their respective sources as described in the manuscript.
 
 **Data included**
 
 * `data/SALUS_output`: SALUS crop model output for the simulations used for the yield validation, BAU, and LEMA scenarios. Results files were generated from raw SALUS output with the template script `code/salus_hpcc/processing/03.70_salusResultsProcesser_rawToSpatial.R`; model specific run files can be found in `SALUS_model/model_scenarios`
 * `data/tabular`: Data from USDA NASS, including crop type summaries, state yields, and commodity prices
 * `data/tabular/wellData`: Data on groundwater pumping derived from the WIMAS database maintained by the Kansas Division of Water Resources
+* `data/gis`: GIS input files including (1) AIM-HPA annual irrigation maps, filtered with KS place-of-use tracts and clipped to study area, and (2) Cropland Data Layer maps, cleaned for speckle and clipped to study area
+* `data/ET_validation`: datasets for the ET validation between SALUS and PML v2 (a satellite-based product)
 
 ### Code
 * Code to perform all paper analyses and generate figures in the paper 
 
-Script filenames are numbered in sequential order of use. Processing is done using [R Markdown](https://rmarkdown.rstudio.com/) within an R project structure. Operational scripts have extension .Rmd; knitted outputs in .md (for easing viewing on Github) and .html (for desktop viewing) are also provided.
+Script filenames are numbered in sequential order of use. Processing is done using [R Markdown](https://rmarkdown.rstudio.com/) within an R project structure. Operational scripts have extension .Rmd; notebook style docs (code + outputs) in .md (for easing viewing on Github) and .html (for desktop viewing) are also provided.
 
 ### Figure
 Figure output from scripts used to generate figures in the main text.
