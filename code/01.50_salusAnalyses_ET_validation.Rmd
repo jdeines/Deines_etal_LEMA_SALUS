@@ -1,0 +1,406 @@
+---
+title: 'SALUS validation: ET'
+author: "jill deines"
+date: "2/6/2021"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    keep_md: true
+---
+
+Goal: Check SALUS estimated ET against a satellite product for irrigated pixels
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      fig.path='../figure/01.50_salusAnalyses_ET_valid/',
+                      cache = FALSE)
+```
+
+**R Packages Needed**
+
+```{r packages, warning=FALSE, message=FALSE}
+library(tidyverse)
+library(lubridate)
+library(sf)
+library(rgdal)
+library(raster)
+library(RColorBrewer)
+library(here)
+
+# function to easily calculate agreement
+source(paste0(here::here(), '/code/misc_functions/calcStats.R'))
+```
+
+*Data Notes*
+Satellite estimations of ET were acquired through Earth Engine; description: “Penman-Monteith-Leuning Evapotranspiration V2 (PML_V2) The PML_V2 products perform well against observations at 95 flux sites across globe, and are similar to or noticeably better than major state-of-the-art ET and GPP products widely used by water and ecology science communities (Zhang et al., 2019).”
+
+https://developers.google.com/earth-engine/datasets/catalog/CAS_IGSNRR_PML_V2
+
+
+*Directories*
+
+```{r directories}
+baseDir <- here::here()
+
+# salus output
+salusDir <- paste0(baseDir, '/data/SALUS_output')
+LEMAmodel <- '3_LEMA_0086'
+
+# irrigated area to mask with
+irrDir <- paste0(baseDir, '/data/gis/irrigationMaps')
+irrBase <- '_gmd4plus_AIM-HPA_test3clean3_aea.tif'
+
+# sd6 outline
+gisDir <- paste0(baseDir, '/data/gis')
+sd6Name <- 'Sheridan6_fromKGS_sd6.shp'
+
+# pml ET data
+etDir <- paste0(baseDir, '/data/ET_validation')
+etRasterName <- '2014_ET_PML.tif'
+etFileName <- 'PML_v2_ETvars_s6mean_irrigatedAreaOnly2_allE_2005-2017.csv'
+```
+
+# Vis Maps
+compare maps of total ET from SALUS vs satellite products. Randomly chose 2014 for visualization. PML raster was exported from Earth Engine
+
+```{r 3_ETmaps_2014, fig.width = 3.75, fig.height = 2.5, dev=c('png','tiff'),dpi = 300}
+# load SD6
+sd6 <- read_sf(paste0(gisDir, '/', sd6Name)) %>%
+  st_transform(3857) %>%
+  as(., "Spatial")
+
+# load PML export
+pml2014_a <- raster(paste0(etDir,'/',etRasterName))
+pml2014 <- mask(pml2014_a, sd6)
+
+# load salus ET raster for LEMA scenario and reproject to mercator
+r0086 <- readRDS(paste0(salusDir,'/',LEMAmodel,'/results/etac_stack.rds'))
+lema <- r0086[['X2014']]
+lema_merc <- projectRaster(lema, crs = projection(pml2014))
+
+# plot
+colorbreaks <- seq(325, 852, 25)
+labels <- c('325','','','400','','','475','','','550','','','625','','',
+            '700','','','775','','','850')
+pal <- colorRampPalette(RColorBrewer::brewer.pal(9,'YlGnBu'))
+
+spplot(pml2014, col.regions=pal(23),
+       at = colorbreaks,
+       colorkey = list(labels = labels, space = 'left'))
+spplot(lema_merc, col.regions=pal(23),   
+       at = colorbreaks,  maxpixels = 800000,
+       colorkey = list(labels = labels))
+
+```
+
+# Compare ET: All irrigated areas
+Our analysis only looks at the differences in ET/irrigated areas, so we compare SALUS LEMA scenario ET and PML ET for all irrigated pixels (identified with AIM-HPA mask)
+
+## SALUS ET: irrigated areas 
+get mean annual ET over irrigated areas from the SALUS LEMA scenario
+
+```{r salusET_irrOnly}
+# load salus output: ET stack and subset for study years
+r0086 <- readRDS(paste0(salusDir,'/',LEMAmodel,'/results/etac_stack.rds'))
+years <- 2008:2017
+
+# mask non-irrigated areas on each salus output map with aim-hpa
+irrET_salus_list <- list()
+for (i in 1:length(years)){
+  
+  # extract year's raster
+  etRas <- r0086[[paste0('X',years[i])]]
+  
+   # aim 
+  aim <- raster(paste0(irrDir, '/', years[i], irrBase))
+  aimCrop <- crop(aim, etRas)
+  aimCrop[aimCrop !=1] <- NA
+ 
+  etRasIrr <- mask(etRas, aimCrop)
+  
+  irrET_salus_list[[i]] <- etRasIrr
+}
+irrET_salus <- stack(irrET_salus_list)
+#spplot(irrET_salus)
+
+# get regional mean ET for all irrigated areas
+salusIrrMeans <- cellStats(irrET_salus, 'mean')
+salusIrrMeans
+```
+
+
+
+
+
+```{r loadET}
+#load - summed cell values for SD6
+pml_raw <- read_csv('/Users/deinesji/Google Drive/GEE_Lema2/lema2_tableExports/lema2_gridmetTables/PML_v2_ETvars_s6mean_2005-2017.csv') %>%
+  dplyr::select(-c(`system:index`,`.geo`))
+
+# format
+pml <- pml_raw %>%
+  mutate(date = ymd(day),
+         year = year(date),
+         # convert mm/day to mm/8day
+         Ec_8day = Ec * 8,
+         Es_8day = Es * 8,
+         # convert mm/8day to water volume per SD6 (256 km2)
+         Ec_sd6 = (Ec_8day/1000)* 256000000,
+         Es_sd6 = (Es_8day/1000) * 256000000) %>%
+  group_by(year) %>%
+  summarize(Ec_annual_m3 = sum(Ec_sd6),
+            Es_annual_m3 = sum(Es_sd6)) %>%
+  mutate(Et_annual_m3 = Es_annual_m3 + Ec_annual_m3)
+
+pml
+```
+
+
+
+
+## Load PML and compare
+PML ET was sampled in Google Earth Engine at 30 m resolution, masked with AIM-HPA
+
+```{r 1_sd6_compare_etIrrigated, fig.width = 3.5, fig.height = 3, dev = c('png','pdf'), dpi = 300}
+#load - mean values over irriagted fields for SD6
+pml_irr <- read_csv(paste0(etDir,'/', etFileName)) %>%
+  dplyr::select(-c(`system:index`,`.geo`))
+
+# format
+ET_irrAreaCompare <- pml_irr %>%
+  filter(year > 2007) %>%
+  dplyr::select(c(year, mean)) %>%
+  rename(PML_irrMean_mm = mean) %>%
+  mutate(SALUS_irrMean_mm = salusIrrMeans)
+
+# mean mm/year
+ggplot(ET_irrAreaCompare, aes(x = SALUS_irrMean_mm, y = PML_irrMean_mm, color = year)) +
+  geom_point() +
+  geom_smooth(method = 'lm') +
+  geom_abline(slope = 1, intercept = 0, linetype='dashed') +
+  coord_equal() + xlim(600, 775) + ylim(600, 775) +
+   ylab(expression(paste('Satellite ET (mm ',year^-1,')',sep=''))) +
+    xlab(expression(paste('SALUS Model ET (mm ',year^-1,')',sep=''))) +
+  scale_color_continuous(breaks = c(2008, 2011, 2014, 2017)) + 
+  theme_bw() + theme(legend.position=c(.6,.13),
+                     legend.direction = 'horizontal',
+                     legend.background = element_blank(),
+                      panel.grid.minor = element_blank())
+
+# agreement metrics
+calcStats(ET_irrAreaCompare$SALUS_irrMean_mm, ET_irrAreaCompare$PML_irrMean_mm)
+
+# value ranges
+summary(ET_irrAreaCompare$SALUS_irrMean_mm)
+summary(ET_irrAreaCompare$PML_irrMean_mm)
+```
+
+
+# Point analysis: Manual
+200 manual points per year placed near "field centers"
+
+## add attributes
+for each point, add cleaned CDL value, cleaned AIM irrigation status, and SALUS ET estimates
+
+```{r pointAttributes_manual, eval = FALSE}
+pmlDir <- '/Users/deinesji/Google Drive/GEE_Lema2/lema2_tableExports/lema2_etTables/'
+pmlBase <- 'PML_v2_ETvars_points200_manual_'
+
+cdlDir <- '/Users/deinesji/Dropbox/1PhdJill/hpa/LEMA_Part2/data/salus/cdl/'
+cdlBase <- '_CDL_gmd4PlusClips_aea_despeckRoads.tif'
+cdlKey <- read_csv('/Users/deinesji/Dropbox/1PhdJill/hpa/LEMA_Part2/data/tabular/CDL_key_2014.csv') %>%
+  rename(CDL = VALUE,
+         CDLname = CLASS_NAME) %>%
+  dplyr::select(c(CDL, CDLname))
+
+irrDir <- '/Users/deinesji/Dropbox/1PhdJill/hpa/LEMA_Part2/data/salus/irrigationMaps/'
+irrBase <- '_gmd4plus_AIM-HPA_test3clean3_aea.tif'
+
+salusDir <- '/Users/deinesji/Dropbox/1PhdJill/hpa/LEMA_Part2/data/salus/experiments/0030_waterSA/0086_thetaC/results/'
+epBase <- 'epac_stack.rds'
+esBase <- 'esac_stack.rds'
+etBase <- 'etac_stack.rds'
+
+years <- 2008:2017
+
+pointList <- list()
+for (i in 1:length(years)){
+  # load pml and spatialize to sp
+  pointyear <- read_csv(paste0(pmlDir, pmlBase, years[i],'.csv')) %>%
+    dplyr::select(-c(`system:index`,`.geo`)) %>%
+    st_as_sf(coords = c('longitude','latitude'), crs = 4326)  %>%
+    st_transform(5070) %>%
+    as(., 'Spatial')
+  
+  # load rasters
+  cdl <- raster(paste0(cdlDir, years[i], cdlBase))
+  aim <- raster(paste0(irrDir, years[i], irrBase))
+  etac <- readRDS(paste0(salusDir, etBase))[[paste0('X',years[i])]]
+  epac <- readRDS(paste0(salusDir, epBase))[[paste0('X',years[i])]]
+  esac <- readRDS(paste0(salusDir, esBase))[[paste0('X',years[i])]]
+  
+  # create 500 m salus data
+  etac_large <- projectRaster(etac, pml2014)
+  epac_large <- projectRaster(epac, pml2014)
+  esac_large <- projectRaster(esac, pml2014)
+  
+  # stack
+  cdlSmall <- crop(cdl, etac)
+  aimSmall <- crop(aim, etac)
+  attribute_stack <- stack(cdlSmall, aimSmall, etac, epac, esac)
+  names(attribute_stack) <- c('CDL','AIM','etac','epac','esac')
+  
+  largeStack = stack(etac_large, epac_large,esac_large)
+  names(largeStack) <- c('salus_ET_500','salus_plant_500','salus_soil_500')
+  
+  attributeData <- extract(attribute_stack, pointyear)
+  attributeData2 <- extract(largeStack, pointyear)
+  
+  # format
+  pointsOut <- as.tibble(cbind(pointyear, attributeData, attributeData2)) %>%
+    rename(PML_soil = Es,
+           PML_trans = Ec,
+           salus_soil = esac,
+           salus_trans = epac,
+           salus_ET = etac,
+           latitude = coords.x1,
+           longitude = coords.x2) %>%
+    mutate(PML_ET = PML_soil + PML_trans) %>%
+    left_join(cdlKey) %>%
+    dplyr::select(c(year, CDLname, CDL, AIM, latitude, longitude, everything()))
+  
+  pointList[[i]] <- pointsOut
+}
+
+pointsAll <- do.call("rbind", pointList)
+
+write_csv(pointsAll, '/Users/deinesji/Dropbox/1PhdJill/hpa/LEMA_Part2/data/tabular/ETvalidation_PML_manualPoints200perYear.csv')
+```
+
+## compare
+
+### salus 30 m
+
+```{r pointsManual_30m}
+pointsAll <- read_csv('/Users/deinesji/Dropbox/1PhdJill/hpa/LEMA_Part2/data/tabular/ETvalidation_PML_manualPoints200perYear.csv')
+
+# keep only salus simulated
+pointsSalus <- pointsAll %>% filter(CDL %in% c(1,4,5,24,36, 61,176))
+
+# all sampled
+ggplot(pointsSalus, aes(x = salus_ET, y = PML_ET)) +
+  geom_point() +
+  geom_smooth(method = 'lm') +
+  geom_abline(slope = 1, intercept = 0, linetype='dashed') +
+  coord_equal() + xlim(200, 900) + ylim(200,900) +
+  xlab('SALUS ET (mm)') + ylab('PML ET (mm)') +
+  theme_bw() + ggtitle('ET, all points')
+
+SCYMr::calcStats(pointsSalus$salus_ET, pointsSalus$PML_ET)
+
+# by crop type
+ggplot(pointsSalus, aes(x = salus_ET, y = PML_ET, color = as.factor(AIM))) +
+  geom_point() +
+    geom_smooth(method = 'lm') +
+  geom_abline(slope = 1, intercept = 0, linetype='dashed') +
+  coord_equal() + xlim(400, 900) + ylim(400,900) +
+  facet_wrap(~CDLname) +
+  xlab('SALUS ET (mm)') + ylab('PML ET (mm)') +
+  theme_bw() + ggtitle('ET, all points')
+
+# ET components
+ggplot(pointsSalus, aes(x = salus_soil, y = PML_soil, color = as.factor(AIM))) +
+  geom_point() +
+    geom_smooth(method = 'lm') +
+  geom_abline(slope = 1, intercept = 0, linetype='dashed') +
+  coord_equal() + xlim(200, 500) + ylim(200,500) +
+  facet_wrap(~CDLname) +
+  xlab('SALUS (mm)') + ylab('PML (mm)') +
+  theme_bw() + ggtitle('soil evaporation, all points')
+
+ggplot(pointsSalus, aes(x = salus_trans, y = PML_trans, color = as.factor(AIM))) +
+  geom_point() +
+    geom_smooth(method = 'lm') +
+  geom_abline(slope = 1, intercept = 0, linetype='dashed') +
+  coord_equal() + xlim(200, 500) + ylim(200,500) +
+  facet_wrap(~CDLname) +
+  xlab('SALUS (mm)') + ylab('PML (mm)') +
+  theme_bw() + ggtitle('plant transpiration, all points')
+
+
+ggplot(pointsSalus %>% filter(CDL %in% c(1) & AIM == 1),
+       aes(x = salus_ET, y = PML_ET)) +
+  geom_point() +
+    geom_smooth(method = 'lm') +
+  geom_abline(slope = 1, intercept = 0, linetype='dashed') +
+  coord_equal() + xlim(400, 900) + ylim(400,900) +
+  xlab('SALUS ET (mm)') + ylab('PML ET (mm)') +
+  theme_bw() + ggtitle('ET, all irrigated maize points')
+
+ggplot(pointsSalus %>% filter(CDL %in% c(1,5) & AIM == 1),
+       aes(x = salus_ET, y = PML_ET)) +
+  geom_point() +
+    geom_smooth(method = 'lm') +
+  geom_abline(slope = 1, intercept = 0, linetype='dashed') +
+  coord_equal() + xlim(400, 900) + ylim(400,900) +
+  xlab('SALUS ET (mm)') + ylab('PML ET (mm)') +
+  theme_bw() + ggtitle('ET, all irrigated maize + soy points')
+
+ggplot(pointsSalus %>% filter(CDL %in% c(1) ),
+       aes(x = salus_ET, y = PML_ET, color = as.factor(AIM))) +
+  geom_point() +
+    geom_smooth(method = 'lm') +
+  geom_abline(slope = 1, intercept = 0, linetype='dashed') +
+  coord_equal() + xlim(400, 900) + ylim(400,900) +
+  xlab('SALUS ET (mm)') + ylab('PML ET (mm)') +
+  theme_bw() + ggtitle('ET, all irrigated maize points')
+
+
+# by irrigation status
+irrStatus <- pointsSalus %>%
+  dplyr::select(c(year, CDLname, CDL, AIM, salus_ET, PML_ET)) %>%
+  tidyr::gather(., key = datasource, value = ET_mm, salus_ET:PML_ET)
+
+pointsSalus %>%
+  filter(CDL %in% c(1,5)) %>%
+  group_by(AIM) %>%
+  summarize(count=n())
+
+ggplot(irrStatus %>% filter(CDL %in% c(1,5)),
+       aes(x = datasource, y = ET_mm, color = as.factor(AIM), group = interaction(AIM,datasource))) +
+  geom_boxplot() +
+  theme_bw() + ggtitle('ET by irrigation status, corn and soy fields')
+
+SCYMr::calcStats(pointsSalus$salus_ET, pointsSalus$PML_ET)
+```
+
+this isn't going anywhere - PML doesn't have the resolution
+
+```{r 2_ET_not_resolved, fig.width = 3.5, fig.height = 3, dev = c('png','pdf'), dpi = 300}
+visKey <- data.frame(datasource = c('salus_ET','PML_ET'),
+                     datasource2 = c('SALUS model', 'Satellite'), 
+                     stringsAsFactors = FALSE)
+
+visKey2 <- data.frame(AIM = c(0,1),
+                     AIM2 = c('Rainfed', 'Irrigated'), 
+                     stringsAsFactors = FALSE)
+
+irrStatus2 <- irrStatus %>%
+  left_join(visKey) %>%
+  left_join(visKey2)
+
+
+ggplot(irrStatus2 %>% filter(CDL %in% c(1,5)),
+       aes(x = datasource2, y = ET_mm, fill = AIM2, group = interaction(AIM2,datasource2))) +
+  geom_boxplot() +
+  ylab('ET (mm)') + xlab('Source') +
+  theme_bw() +   theme_bw() + theme(legend.position=c(.7,.16),
+                                    legend.title = element_blank(),
+                                    legend.background = element_blank(),
+                                    panel.grid.minor = element_blank())
+```
+
+
+
+
