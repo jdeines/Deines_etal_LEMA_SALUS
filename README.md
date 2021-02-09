@@ -19,9 +19,10 @@ All data needed to reproduce the figures and results presented in the manuscript
 
 **Data included**
 
-* `data/SALUS_output`: SALUS crop model output for the simulations used for the yield validation, BAU, and LEMA scenarios. Results files were generated from raw SALUS output with the template script `code/salus_hpcc/processing/03.70_salusResultsProcesser_rawToSpatial.R`; model specific run files can be found in `SALUS_model/model_scenarios`
+* `data/SALUS_output`: SALUS crop model output for the simulations used for the yield validation, irrigation parameter sensitivity analysis, and BAU and LEMA scenarios. Results files were generated from raw SALUS output with the template script `code/salus_hpcc/processing/03.70_salusResultsProcesser_rawToSpatial.R`; model specific run files can be found in `SALUS_model/model_scenarios`
 * `data/tabular`: Data from USDA NASS, including crop type summaries, state yields, and commodity prices
 * `data/tabular/wellData`: Data on groundwater pumping derived from the WIMAS database maintained by the Kansas Division of Water Resources
+* `data/tabular/energy_McCarthy`: Data from [McCarthy et al. 2021](https://pubs.acs.org/doi/abs/10.1021/acs.est.0c02897) on pumping energy 
 * `data/gis`: GIS input files including (1) AIM-HPA annual irrigation maps, filtered with KS place-of-use tracts and clipped to study area, and (2) Cropland Data Layer maps, cleaned for speckle and clipped to study area
 * `data/ET_validation`: datasets for the ET validation between SALUS and PML v2 (a satellite-based product)
 
