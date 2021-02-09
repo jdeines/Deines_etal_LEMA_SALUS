@@ -26,6 +26,7 @@ knitr::opts_chunk$set(echo = TRUE,
 ```{r packages, warning=FALSE, message=FALSE}
 library(tidyverse)
 library(here)
+library(sf)
 
 sessionInfo()
 ```
@@ -144,6 +145,74 @@ https://www.electricitylocal.com/states/kansas/
 * commericial: 9.24
 * industrial: 7.09
 * residential: 11.24
+
+### energy by lema: extract
+from Ben McCarthy et al. 2021
+
+#### extract SD6 wells
+
+```{r energyByWell}
+# energy of all of wimas
+energy <- read_csv(paste0(baseDir, '/data/tabular/energy_McCarthy/AT_AE_Converted_withPUMP.csv')) %>%
+  filter(WUA_YEAR > 2007)  %>%
+    st_as_sf(coords = c('LONGITUDE','LATITUDE'), crs = 4326)  
+
+# lema boundary
+sd6 <- read_sf(paste0(baseDir,'/data/GIS/Sheridan6_fromKGS_sd6.shp')) %>%
+  st_transform(4326)
+
+# lema wells
+energyLema <- energy %>% st_join(sd6, join = st_within) %>% filter(!is.na(GMD4_HPA)) %>%
+  as.data.frame()
+
+```
+
+#### get lema energy intensity
+
+```{r lemaEnergy}
+
+# get total annual energy
+sd6_yearly <- energyLema %>%
+  group_by(WUA_YEAR) %>%
+  summarize(lift_energy = sum(LIFT_ENERG),
+            pump_energy = sum(EnergyPump))
+
+ggplot(sd6_yearly,
+       aes(y = pump_energy, x = WUA_YEAR)) +
+  geom_line()
+
+ggplot(sd6_yearly,
+       aes(y = lift_energy, x = WUA_YEAR)) +
+  geom_line()
+
+# load combined wimas/salus water data, median salus yields, nass yields
+summaryDir <- paste0(baseDir, '/data/SALUS_output/summaries')
+summary <- read_csv(paste0(summaryDir,'/validationDataSalus_disx.csv'))%>%
+  filter(year >= 2008 & runID %in% c('0054','0086')) %>%
+  mutate(runID = recode(runID, '0086' = 'LEMA', '0054' = 'BAU'))
+
+waterVolumes <- summary %>%
+  mutate(wimasVol_m3 = wimasVolume_km3 * 1e9,
+         salusVol90_m3 = salusVol_90adj * 1e9)%>%
+  dplyr::select(c(runID, year, salusVol90_m3, wimasVol_m3))
+
+# add water volumes to energy 
+sd6_yearly2 <- sd6_yearly %>%
+  rename(year = WUA_YEAR) %>%
+  left_join(waterVolumes %>% filter(runID == "LEMA")) %>%
+  # find energy intensity in ML/m3
+  mutate(energyIntensity = pump_energy/wimasVol_m3,
+         liftEnergyIntensity = lift_energy/wimasVol_m3)
+
+ggplot(sd6_yearly2, aes(x = year, y = energyIntensity)) +
+  geom_line()
+
+intensityTrend <- lm(energyIntensity ~ year, data = sd6_yearly2)
+summary(intensityTrend)
+
+energyIntensity <- round(mean(sd6_yearly2$energyIntensity),2)
+energyIntensity
+```
 
 ## SALUS data
 
@@ -267,7 +336,7 @@ energyDollarsPerMJ <- energyDollarsPerkWh / 3.6
 
 waterCosts <- water %>%
   mutate(volume_m3 = salusVol_90adj * 1e9,
-         MJ = volume_m3 * 3.1) %>%
+         MJ = volume_m3 * energyIntensity) %>%
   mutate(waterCosts = MJ * energyDollarsPerMJ)
 waterCosts
 
