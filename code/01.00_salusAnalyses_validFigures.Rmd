@@ -75,6 +75,19 @@ nassState <- read_csv(paste0(nassDir,
   dplyr::select(-c(yield_bu_acre, state_name)) %>%
   rename(stateNassYields = yield_kg_ha)
 
+# sheridan county level
+nassSheridan <- read_csv(paste0(nassDir,
+                    '/NASS_yields_KS_2006-2017_4crops_CLEANED.csv')) %>%
+  filter(county_name == 'SHERIDAN') %>%
+  mutate(type = recode(type, "NON-IRRIGATED" = "Rainfed", 
+                             "IRRIGATED" = "Irrigated", 
+                             "ALL" = "Combined")) %>%
+  rename(sheridanNassYields = yield_kg_ha) %>%
+  # drop unneeded "coombineds"
+  filter(!(type == "Combined" & crop %in% c('CORN'))) %>%
+  filter(year >= plotYear) %>%
+  dplyr::select(c(year, crop, type, sheridanNassYields))
+
 ```
 
 ## load SALUS runs
@@ -102,9 +115,10 @@ yields <- read_csv(paste0(salusDir,'/',yieldValidModel,'/results/yields_statsAnd
 
 # combine data
 yieldValid <- yields %>%
+  full_join(nassSheridan, by = c('year','crop','type')) %>%
   full_join(nassState, by = c('year','crop','type'))
 
-# assoicate nass state combined with salus rainfed
+# state ---------
 yieldValidSimple <- yieldValid %>%
   # assign 'combined' nass data to rainfed
     mutate(type2 = recode(type, 'Combined' = 'Rainfed')) %>%
@@ -116,28 +130,55 @@ nasser <- yieldValidSimple %>%
   select(c(year, crop, type2, stateNassYields)) %>%
   filter(!is.na(stateNassYields))
 
+actuallySimple <- yieldValidSimple %>%
+  select(c(year, crop, type2, yield_median_kgha)) %>%
+  filter(!is.na(yield_median_kgha)) %>%
+  left_join(nasser, by = c('year','crop','type2'))
+
+# county ------------
+# assoicate nass state combined with salus rainfed
+yieldValidSimple2 <- yieldValid %>%
+  # assign 'combined' nass data to rainfed
+    filter(type != 'Combined') %>%
+  rename(type2 = type) %>%
+  mutate(crop = recode(crop, 'CORN' = 'Corn', 'SORGHUM' = 'Sorghum',
+                       'SOYBEANS' = 'Soybeans','WHEAT' = 'Wheat'))
+# extract and smoosh back together
+nasserCounty <- yieldValidSimple2 %>% 
+  select(c(year, crop, type2, sheridanNassYields)) %>%
+  filter(!is.na(sheridanNassYields))
+
 # assoicate nass state combined with salus rainfed
 yieldValidState <- yieldValidSimple %>%
   select(c(year, crop, type2, yield_median_kgha)) %>%
   filter(!is.na(yield_median_kgha)) %>%
   left_join(nasser, by = c('year','crop','type2'))
+
+actuallySimpleCounty <- yieldValidSimple %>%
+  select(c(year, crop, type2, type, yield_median_kgha)) %>%
+  filter(type != 'Combined') %>%
+  left_join(nasserCounty, by = c('year','crop','type2')) %>%
+    filter(!is.na(sheridanNassYields)) 
 ```
 
 ## Plot!
 yield validation
 
 ```{r yieldValidSimple_manuscript, dev=c('png'), fig.height = 3.5, fig.width =3.5, dpi=600}
-
 # plot it
-ggplot(yieldValidState,
+# plot
+ggplot(actuallySimple,
        aes(x=stateNassYields/1000, y = yield_median_kgha/1000, color=crop)) +
       stat_smooth(method = 'lm', se=F, size=1, colour='cornflowerblue') +
   geom_point(aes(shape = type2)) +
-  scale_shape_manual(values = c(16, 4)) +
+  # county data - outline with black
+      geom_point(aes(x=sheridanNassYields/1000, y = yield_median_kgha/1000, shape = type2), color = 'black', size = 2.5, data = actuallySimpleCounty) +
+  geom_point(aes(x=sheridanNassYields/1000, y = yield_median_kgha/1000, shape = type2, color = crop), data = actuallySimpleCounty) +
+  scale_shape_manual(values = c(16, 17)) +
     geom_abline(slope = 1, intercept = 0, linetype='dashed') + 
      coord_equal(xlim=c(0,15), ylim=c(0,15)) + 
   scale_color_manual(values=c('goldenrod2','darkorange2','forestgreen','orange4'))+
-  ylab('SALUS Yields (t/ha)') + xlab('NASS State Yields (t/ha)') +
+  ylab('SALUS Yields (t/ha)') + xlab('NASS Yields (t/ha)') +
    theme_bw() + theme(legend.position = c(.18,.69),
                       legend.background = element_blank(),
                      legend.title = element_blank(),
@@ -148,7 +189,12 @@ ggplot(yieldValidState,
                      axis.title=element_text(size=11))
 
 
-simpleAgreement <- lm(yield_median_kgha~stateNassYields, data=yieldValidState)
+# and get rsq - state
+simpleAgreement <- lm(yield_median_kgha~stateNassYields, data=actuallySimple)
+summary(simpleAgreement)
+
+# rsq with county
+simpleAgreement <- lm(yield_median_kgha~sheridanNassYields, data=actuallySimpleCounty)
 summary(simpleAgreement)
 ```
 
