@@ -1,3 +1,5 @@
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.4271209.svg)](https://doi.org/10.5281/zenodo.4271209)
+
 # Deines, Kendall, Butler, Basso, & Hyndman 2021, WRR
 ## Model files, derived data, and analysis code
 
