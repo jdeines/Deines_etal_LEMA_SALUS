@@ -1,0 +1,404 @@
+---
+title: "Salus Analyses - Water SA"
+author: "Jill Deines"
+date: "July 9, 2018"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    keep_md: true
+---
+
+Goal: Analyze SALUS output - comparing salus water use estimates with WIMAS data to identify irrigation parameters.
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      fig.path='../figure/04.10_salusAnalyses_waterSA/',
+                      cache = FALSE)
+```
+
+**R Packages Needed**
+
+```{r packages, warning=FALSE, message=FALSE}
+library(tidyverse)
+library(stringr)
+library(purrr)
+library(gghighlight)
+library(patchwork)
+library(here)
+
+
+# function to easily calculate agreement
+source(paste0(here::here(), '/code/misc_functions/calcStats.R'))
+
+sessionInfo()
+```
+
+**Directories**
+
+```{r dirs}
+baseDir <- here::here()
+
+# main folder containing SALUS runs
+exptDir <- paste0(baseDir, '/data/SALUS_output/0030_waterSA')
+
+# directory containing wimas well data
+welldir <- paste0(baseDir, '/data/tabular/wellData')
+wellFileName<- 'WIMAS_1996-2016_SheridanNull9_convertedUnits.csv'
+```
+
+# Comparison Data
+
+## WIMAS water use data
+Load water use data for comparison
+
+```{r loadWimas}
+# load wimas data for sheridan 6
+wimas <- read_csv(paste0(welldir, '/', wellFileName)) %>%
+  filter(masterid == 'sheridan')  
+
+# count wells in study area duing study period
+wimas %>% 
+  filter(year > 2005 & year < 2018) %>%
+  filter(!is.na(volume_m3)) %>%
+  group_by(PDIV_ID) %>%
+  slice(1) %>%
+  nrow()
+
+# get annual volume totals and format to join with SALUS
+wimasAnnual <- wimas %>%
+  group_by(year) %>%
+  summarise(wimasVolume_m3 = sum(volume_m3, na.rm=TRUE),
+            wimasArea_m2 = sum(area_m2, na.rm=TRUE),
+            wimasDepth_mm = mean(depth_m * 1000, na.rm=TRUE)) %>%
+  mutate(wimasArea_ha = wimasArea_m2 * 1e-4,
+         wimasVolume_km3 = wimasVolume_m3 * 1e-9,
+         datasource = 'WIMAS') %>%
+  dplyr::select(c(year, wimasVolume_km3))
+```
+
+
+# SALUS results
+
+## Water Use Runs: Load and combine data
+Make a master table of water use runs containing total pumping volume
+
+* The 'datasource' column will be the run ID to facilitate identification. 
+* Join runs with parameter values to plot how water use changes with parameters
+
+
+```{r loadSalus}
+# list parameter files
+paramFiles <- list.files(exptDir, pattern = '*parameters.csv', recursive =TRUE,
+                         full.names = TRUE)
+# list waterVars files
+waterFiles <- list.files(exptDir, pattern = '*WaterVars*', recursive =TRUE,
+                         full.names = TRUE)
+# list yield files
+yieldFiles <- list.files(exptDir, pattern = '*yields*', recursive =TRUE,
+                         full.names = TRUE)
+
+# add names to file lists based on file name - run name
+names(paramFiles) <- str_sub(paramFiles, -26, -23)
+names(waterFiles) <- str_sub(waterFiles, -45, -42)
+
+# load each set of files into 1 data frame --------
+
+# params: keep only water relevant ones - get 1 param set per run
+params <- purrr::map_df(paramFiles, read_csv, col_types = cols(), .id='runID') %>%
+  dplyr::select(c(year, runID, crop, ThetaC, AIrAm)) %>%
+  group_by(year, runID) %>%
+  summarize(ThetaC = median(ThetaC, na.rm = TRUE),
+            AIrAm = median(AIrAm, na.rm=TRUE))
+
+# water: add data source, extract just irrigation volume
+water <- purrr::map_df(waterFiles, read_csv, col_types = cols(), .id='runID') %>%
+  mutate(datasource = 'salus') %>%
+  filter(variable == 'irrigation') %>%
+  mutate(salusVolume_km3 = totalVolume_m3 * 1e-9) %>%
+  dplyr::select(c(runID, year, salusVolume_km3))
+
+# combine  ----------------
+master <- water %>%
+  left_join(params, by = c('year', 'runID')) %>%
+  left_join(wimasAnnual, by=c('year')) %>%
+  mutate(runID_num = as.numeric(runID)) %>%
+  filter(runID_num < 66 | runID_num == 86)
+
+# assume a 90% efficiency -------------------------------
+master$salusVol_90adj <- master$salusVolume_km3 / 0.9
+```
+
+## vis: ID matching runs
+Take a look at salus vs wimas irrigation volumes to identify runs which approximate pre-LEMA and LEMA water use
+
+```{r exVis, fig.width = 8.5, fig.height = 7}
+#  90% efficiency -------------------------------
+ggplot(master,
+       aes(x=year, y = salusVol_90adj, color = runID, group = runID)) +
+  geom_line() + 
+  # add wimas
+  geom_line(data = master, 
+            aes(x=year, y = wimasVolume_km3), color = 'blue', lwd=2) +
+  geom_vline(xintercept = 2007.5) +
+   geom_vline(xintercept = 2012.5) +
+  ggtitle('All water SA, Adjusted 90% Efficient')
+
+
+# highlight runs  that look ok for pre_LEMA
+ggplot(master, 
+                 aes(x=year, y = salusVol_90adj, color = runID,
+                     group = runID)) +
+  geom_line() +
+  gghighlight(max(salusVol_90adj) > .034) +
+  # add wimas
+  geom_line(data = master, 
+            aes(x=year, y = wimasVolume_km3), color = 'blue', lwd=2) +
+    geom_vline(xintercept = 2007.5) +
+   geom_vline(xintercept = 2012.5) +
+  ggtitle('ID salus runs at 90% for pre-LEMA period')
+
+# highlight runs for LEMA
+ggplot(master, 
+                 aes(x=year, y = salusVol_90adj, color = runID,
+                     group = runID))  +
+  geom_line() +
+  gghighlight(max(salusVol_90adj) < .033 & max(salusVol_90adj) > .027) +
+  # add wimas
+  geom_line(data = master, 
+            aes(x=year, y = wimasVolume_km3), color = 'blue', lwd=2) +
+    geom_vline(xintercept = 2007.5) +
+   geom_vline(xintercept = 2012.5) +
+  ggtitle('ID salus runs at 90% for LEMA period')
+
+```
+
+## Quantify best runs
+use error metrics to pick the best
+
+```{r quantitativeChooser_preLema, fig.width = 3.3, fig.height = 3}
+preLemaData <- master %>% filter(year > 2007 & year < 2013)
+LemaData <- master %>% filter(year > 2012)
+
+preLemaAgreement <- preLemaData %>%
+  group_by(runID) %>%
+  do(as.data.frame(calcStats(.$salusVol_90adj,.$wimasVolume_km3))) %>%
+  arrange(mae)
+preLemaAgreement
+
+# highlight runs for preLEMA
+preLemaW <- master %>%
+  filter(runID %in% c('0054','0051','0052'))
+
+ggplot(preLemaW, 
+                 aes(x=year, y = salusVol_90adj, color = runID,
+                     group = runID))  +
+  geom_line() +
+  # add wimas
+  geom_line(data = master, 
+            aes(x=year, y = wimasVolume_km3), color = 'blue', lwd=2) +
+    geom_vline(xintercept = 2007.5) +
+   geom_vline(xintercept = 2012.5) +
+  ggtitle('ID salus runs at 90% for LEMA period')
+
+# highlight runs for pre_LEMA - best
+ggplot(master, 
+                 aes(x=year, y = salusVol_90adj*1e3, color = runID,
+                     group = runID)) +
+  geom_line() +
+  gghighlight(runID %in% c('0054')) +
+  scale_x_continuous(breaks = c(2006, 2010, 2014, 2017)) +
+  # add wimas
+  geom_line(data = master, 
+            aes(x=year, y = wimasVolume_km3*1e3), color = 'blue', lwd=2) +
+    geom_vline(xintercept = 2007.5) +
+   geom_vline(xintercept = 2012.5) +
+  theme_bw() + ylab('Water Extracted (million m^3)')
+
+```
+
+```{r quantitativeChooser_Lema, fig.width = 3.3, fig.height = 3}
+## lema period
+LemaAgreement <- LemaData %>%
+  group_by(runID) %>%
+  filter(year < 2017) %>% # 2017 wasn't available during time of model selection
+  do(as.data.frame(calcStats(.$salusVol_90adj, .$wimasVolume_km3))) %>%
+  arrange(mae)
+LemaAgreement
+
+# highlight runs for pre_LEMA
+ggplot(master, 
+                 aes(x=year, y = salusVol_90adj*1e3, color = runID,
+                     group = runID)) +
+  geom_line() +
+  gghighlight(runID %in% c('0050')) +
+  scale_x_continuous(breaks = c(2006, 2010, 2014, 2017)) +
+  # add wimas
+  geom_line(data = master, 
+            aes(x=year, y = wimasVolume_km3*1e3), color = 'blue', lwd=2) +
+    geom_vline(xintercept = 2007.5) +
+   geom_vline(xintercept = 2012.5) +
+  theme_bw() + ylab('Water Extracted (million m^3)')
+```
+
+
+### heat plot
+
+
+```{r modelSelectionPlots_horz_waterValidFig_toplegend, fig.width =4.35, fig.height = 2.85, dev = c('png','pdf'), dpi = 300}
+lemaPlot <- LemaAgreement %>%
+  dplyr::select(c(runID, mae)) %>%
+  left_join(LemaData %>% filter(year == 2013) %>% dplyr::select(c(runID, ThetaC, AIrAm))) %>%
+  filter(ThetaC >= 45) %>%
+  mutate(period = 'LEMA')
+
+prelemaPlot <- preLemaAgreement %>%
+  dplyr::select(c(runID, mae)) %>%
+  left_join(preLemaData %>% filter(year == 2012) %>% dplyr::select(c(runID, ThetaC, AIrAm))) %>%
+  filter(ThetaC >= 45) %>%
+  mutate(period = 'B LEMA') %>%
+  bind_rows(lemaPlot) %>%
+  mutate(mae2 = mae*1000)
+
+ggplot(prelemaPlot,
+       aes(x = as.factor(ThetaC), y = as.factor(AIrAm), fill = mae2)) +
+  geom_tile() +
+  coord_flip() +
+  facet_wrap(~period, nrow = 1) +
+  ylab('Irrigation Application Depth (mm)') + xlab('Soil Moisture Threshold (%)') +
+  theme_bw() + theme(panel.background = element_rect(fill = 'gray45'),
+                     panel.grid = element_blank(),
+                                       axis.text=element_text(size=10),
+                     legend.text=element_text(size=10),
+                     axis.title=element_text(size=11),
+                     legend.position = 'top')
+```
+
+## Water Use Sensitivity
+
+Get top model runs for each period
+
+```{r figSup_waterUseSA, fig.width = 5, fig.height = 3.5, dev = c('png','pdf')}
+# get top  runs
+lemaModels <- LemaAgreement %>%
+  ungroup() %>%
+  top_n(n=3, wt = -mae) %>%
+  mutate(type = 'lema') %>%
+  dplyr::select(c(runID, type))
+  
+BAUmodels <- preLemaAgreement %>%
+  ungroup() %>%
+  top_n(n=3, wt = -mae) %>%
+  mutate(type = 'bau') %>%
+  dplyr::select(c(runID, type))
+
+modelsToCompare <- lemaModels %>% bind_rows(BAUmodels)
+
+# get model data
+saRuns_allyear <- master %>%
+  inner_join(modelsToCompare)
+
+# plot
+ggplot(saRuns_allyear %>% filter(year > 2007), 
+                 aes(x=year, y = salusVol_90adj*1e3, color = type,
+                     group = runID)) +
+  geom_line() +
+  scale_x_continuous(breaks = c(2008, 2011, 2014, 2017)) +
+  # highlight chosen
+    geom_line(data = saRuns_allyear %>% filter(year > 2007 & runID == '0054'), lwd=2) +
+    geom_line(data = saRuns_allyear %>% filter(year > 2007 & runID == '0050'), lwd=2) +
+  # add wimas
+  geom_line(data = master %>% filter(year > 2007), 
+            aes(x=year, y = wimasVolume_km3*1e3), color = 'blue', lwd=2) +
+   geom_vline(xintercept = 2012.5, linetype = 'dashed', col = 'gray40') +
+  theme_bw() + ylab('Water Extracted (million m^3)') +
+  theme(panel.grid = element_blank())
+
+```
+
+compare water savings
+
+### total
+
+```{r figSup_waterUseSA_diffs, fig.width = 3, fig.height = 3.5}
+# get each run's 5 year lema total water use
+waterUseDiffs <- saRuns_allyear %>%
+  dplyr::select(c(runID, type,year, ThetaC, AIrAm, salusVol_90adj)) %>%
+  filter(year > 2012) %>%
+  group_by(runID, type, ThetaC, AIrAm) %>%
+  summarize(totalLemaWater = sum(salusVol_90adj))
+
+# awkwardly make a fully crossed df
+# expand lema rows
+lemaDf <- waterUseDiffs %>% filter(type == 'lema') %>%
+  ungroup() %>%
+  rename(runID_lema = runID,
+         ThetaC_lema = ThetaC,
+         AIrAm_lema = AIrAm,
+         water_lema = totalLemaWater) %>%
+  dplyr::select(-c(type)) 
+
+lema5 <- lemaDf %>% slice(rep(row_number(), 3)) %>%
+  arrange(runID_lema)
+
+# get bau rows
+bauDf <- waterUseDiffs %>% filter(type == 'bau') %>%
+  ungroup() %>%
+  rename(runID_bau = runID,
+         ThetaC_bau = ThetaC,
+         AIrAm_bau = AIrAm,
+         water_bau = totalLemaWater) %>%
+  dplyr::select(-c(type)) %>% slice(rep(row_number(), 3)) 
+
+#smoosh
+combos <- lema5 %>% bind_cols(bauDf) %>%
+  mutate(water_diff = water_bau - water_lema,
+         water_diff_mm3 = water_diff * 1e3)
+
+ggplot(combos, aes(x = water_diff_mm3)) +
+  geom_density(fill = 'lightblue', col = 'transparent') +
+  geom_vline(xintercept = 39.6, color = 'red', linetype = 'dashed') +
+  theme_bw()+ xlab('Water Saved (million m^3)') +
+  theme(panel.grid = element_blank())
+
+ggplot(combos, aes(y = water_diff_mm3)) +
+  geom_boxplot(fill = 'lightblue') +
+  geom_hline(yintercept = 39.6, color = 'red', linetype = 'dashed') +
+  theme_bw()+ ylab('Distribution of Water Saved (million m^3)') +
+  theme(panel.grid = element_blank(),
+        axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank())
+```
+
+heatplot?
+
+
+```{r figSup_mainText_waterSA_heatplot, fig.width = 2.35, fig.height = 2.85, dev = c('png','pdf')}
+comboHeat <- combos %>% mutate(params_lema = paste0(ThetaC_lema,'% ',AIrAm_lema,' mm'),
+                               params_bau = paste0(ThetaC_bau,'% ',AIrAm_bau, ' mm')) 
+
+ggplot(comboHeat,
+       aes(x = as.factor(params_lema), y = as.factor(params_bau), fill = water_diff_mm3)) +
+  geom_tile() +
+  ylab('BAU Parameters') + xlab('LEMA Parameters') +
+  theme_bw() + theme(panel.background = element_rect(fill = 'gray45'),
+                     panel.grid = element_blank(),
+                     legend.position = 'top',
+                     legend.title = element_blank())
+```
+
+
+
+Final choices based on MAE and supported by yield comparisons (nothing weird happening): 
+
+* 0054 = BAU: 85% thetaC, 31.8 mm applications (1.25 inch)
+* 0050 = LEMA: 80%, 25.0 mm
+
+
+* update: so 0086 is the LEMA scenario, which has 0054 for pre-LEMA years and 0050 for lema years
+
+
+
+
